@@ -190,6 +190,237 @@ In algorithmic trading, one generally has to deal with four types of data:
 | Real-time  | Bid/ask prices for FX     | Posts on Twitter        |
 
 An algorithmic trading project typically starts with a trading idea or hypothesis that needs to be (back)tested based on
-historical financial data. 
+historical financial data.
 
 ### Reading Financial Data From Different Sources
+
+#### The Data Set
+
+With pandas, you can support the three main tasks you usually do with data: reading, handling, and storing data.
+
+#### Reading from a CSV File with Python
+
+Python has a built-in module called csv that supports the reading of data from a CSV file:
+
+```python
+import csv
+
+fn = '../data/AAPL.csv'
+csv_reader = csv.reader(open(fn, 'r'))  # gets a csv iterator
+
+first_5_lines_of_data = list(csv_reader)[:5]
+```
+
+Using a `csv.DictReader` iterator object instead of the standard csv.reader object makes such tasks a bit more
+manageable. Every row of data in the CSV file (apart from the header row) is then imported as a dict object so that
+single values can be accessed via the respective key (which is in the first row). You can calculate an average like
+this: `sum([float(l['CLOSE']) for l in data]) / len(data)` where data is `data = list(csv.DictReader(open(fn, 'r')))`.
+
+#### Reading from a CSV File with pandas
+
+Pandas provide the functionality to read from files and perform lot of common operations on the data returned.
+
+```python
+import pandas as pd
+
+# 'parse_dates' indicates that the entries in the index column should also be interpreted as date-time information
+data = pd.read_csv(fn, index_col=0, parse_dates=True)
+# You can inspect the data loaded with this:
+data.info()
+# Print information of the last rows
+data.tail()
+# This calculates the mean of the colum 'CLOSE'
+data['CLOSE'].mean()
+```
+
+#### Exporting to Excel and JSON
+
+Apart from being able to export to CSV files (_xlwings_ is more appropriate for this purpose), pandas also allows one
+to do the export in the form of Excel spreadsheet files as well as JSON files.
+
+```python
+data.to_excel('data/aapl.xls', 'AAPL')
+data.to_json('data/aapl.json')
+```
+
+#### Reading from Excel and JSON
+
+Pandas can also read from json, use the `read_json` method and operate with the result in the same way than with the
+`read_csv` method. _pandas_ generally provides the right set of parameter combinations to cope with situations like
+using ';' instead of comma to separate tabular data.
+
+### Working with Open Data Sources
+
+_Quandl_ is a platform that aggregates a large number of open, as well as premium data sources. The data is provided via
+a unified API for which a Python wrapper package is available. With Quandl, requests always expect a combination of the
+database and the specific data set desired and returns a panda dataframe by default. You might need a key which can be
+obtained by signing up for a free Quandl account.
+
+```python
+import configparser
+
+config = configparser.ConfigParser()
+config.read('../pyalgo.cfg')
+import quandl as q
+
+# Reads historical data for the BTC/USD exchange rate.
+data = q.get('BCHAIN/MKPRU', api_key=config['quandl']['api_key'])
+# Selects the Value column, resamples it—from the originally daily values to yearly values—and defines the last 
+# available observation to be the relevant one.
+data['Value'].resample('A').last()
+```
+
+The API key can also be configured permanently with the Python wrapper via the following:
+`q.ApiConfig.api_key = 'YOUR_API_KEY'`
+
+### Eikon Data API
+
+Refinitiv is one of the biggest financial data and news providers, its current desktop flagship product is _Eikon_,
+which is the equivalent to the Terminal by Bloomberg. Refinitiv has a python wrapper called _eikon_, but a technical
+prerequisite is that a local desktop application is running that provides a desktop API session.
+In order to use the Eikon Data API, the Eikon app_key needs to be set. You get it via the App Key Generator (APPKEY)
+application in either Eikon or Workspace:
+
+```python
+import eikon as ek
+
+ek.set_app_key(config['eikon']['app_key'])
+```
+
+#### Retrieving Historical Structured Data
+
+An example of historical data retrieval is below:
+
+```python
+symbols = ['AAPL.O', 'MSFT.O', 'GOOG.O']
+
+data = ek.get_timeseries(symbols, start_date='2020-01-01', end_date='2020-05-01', interval='daily', fields=['*'])
+# The above returns a multi-index DataFrame object.
+data.keys()
+# This is a pandas.core.frame.DataFrame type, you can see information with data['AAPL.O'].info() and contents with tail 
+type(data['AAPL.O'])
+# loc access a group of rows and columns by label(s), in this case all columns within those two dates (included)
+print(data['AAPL.O'].loc['2020-08-14 16:00:00': '2020-08-14 16:04:00'])
+# data is resampled to a 30 second interval length (by taking the last value and the sum, respectively), which is 
+# reflected in the DatetimeIndex of the new DataFrame object.
+resampled = data.resample('30s', label='right').agg({'VALUE': 'last', 'VOLUME': 'sum'})
+```
+
+By default, the function `get_timeseries()` provides the following options for the interval parameter: _tick_, _minute_,
+_hour_, _daily_, _weekly_, _monthly_, _quarterly_, and _yearly_.
+
+#### Retrieving Historical Unstructured Data
+
+A major strength of working with the Eikon API via Python is the easy retrieval of unstructured data, which can then be
+parsed and analyzed with Python packages for natural language processing (NLP).
+
+```python
+# This retrieves news headlines for a fixed time interval that includes Apple Inc. as a company and "Macbook” as a word
+headlines = ek.get_news_headlines(query='R:AAPL.O macbook', count=5, date_from='2020-4-1', date_to='2020-5-1')
+# iloc retrieves columns by integer-location based indexing for selection by position
+story = headlines.iloc[0]  # gets the story on the news
+
+# gets the whole news text and displays it using the HTML module
+news_text = ek.get_news_story(story['storyId'])  # This retrieves the news text as html code
+IPython.display.HTML(news_text)  # renders the html
+```
+
+### Storing Financial Data Efficiently
+
+One of the most important scenarios for the management of data sets is "retrieve once, use multiple times" or "write
+once, read multiple times". We can generate a meaningful sample financial data in terms of size by the use of
+pseudorandom numbers.
+
+```python
+# This function is in the chapter3_scripts.py file
+from sample_data import generate_sample_data
+
+data = generate_sample_data(rows=5, cols=4)
+```
+
+#### Storing DataFrame Objects
+
+The storage of a pandas DataFrame object as a whole is made simple by the pandas _HDFStore_ wrapper functionality
+for the _HDF5_ binary storage standard. To store the dataframe, you need to open a _HDFStore_ object and write the
+dataframe to it like `h5 = dataframe.HDFStore('data_location/data.h5', 'w')`. Note that selecting an existing path
+would cause the original file to be overwritten. Make sure to close the database file with `h5.close()`.
+You can also load a an HDFStore file with `h5 = pd.HDFStore('data/data.h5', 'r')`. You can also call the `to_hdf`
+method of a dataframe and set the format parameter to _table_. This allows the appending of new data to the table object
+on disk and also searching over the data on disk, which is not possible with the first approach, althought it is slower:
+
+```python
+# data is a pandas dataframe
+data.to_hdf('data/data.h5', 'data', format='table')
+# Reading is also slower in this application scenario.
+data_copy = pd.read_hdf('data/data.h5', 'data')
+```
+
+The above example has the advantage of one being able to work with the `table_frame` object on disk like with any other
+table object of the _PyTables_ package that is used by pandas in this context. An example of this can be seen below:
+
+```python
+import tables as tb
+
+# Opens the database file for reading.
+h5 = tb.open_file('data/data.h5', 'r')
+# Prints the first three rows in the table.
+h5.root.data.table[:3]
+h5.close()
+```
+
+These two approaches are convenient and efficient when you are working with more or less immutable data sets that fit
+into memory.
+
+#### Using TsTables
+
+The _PyTable_s package is a wrapper for the HDF5 binary storage library that is also used by pandas for its _HDFStore_
+implementation. It is effectively an enhancement of the _PyTables_ package and adds support for time series data. 
+It implements a hierarchical storage approach that allows for a fast retrieval of data sub-sets selected by providing 
+start and end dates and times respectively and used in the "write once, retrieve multiple times" scenario.
+
+```python
+import tstables
+import tables as tb
+
+data = generate_sample_data(rows=2.5e6, cols=5, freq='1s').round(4) # creates data every second
+# The desc class provides the description for the table object’s data structure:
+class desc(tb.IsDescription):
+    ''' 
+    Description of TsTables table structure.
+    '''
+    timestamp = tb.Int64Col(pos=0)
+    No0 = tb.Float64Col(pos=1)
+    No1 = tb.Float64Col(pos=2)
+    No2 = tb.Float64Col(pos=3)
+    No3 = tb.Float64Col(pos=4)
+    No4 = tb.Float64Col(pos=5)
+
+h5 = tb.open_file('data/data.h5ts', 'w')
+# TsTables table is created at the root node, with name data and given the class-based description desc 
+ts = h5.create_ts('/', 'data', desc)
+# This writes the sample data stored in a DataFrame object to the table object on disk
+ts.append(data)
+```
+
+With regard to the structure in the database, _TsTables_ chunks the data into sub-sets of a single day. You can read 
+a subset of the data by calling the `ts.read_range(start, end)` where `start` and `end` are _datetime_ objects (remember
+to close the hdf object always at the end of the processing)
+
+#### Storing Data with SQLite3
+
+Financial time series data can also be written directly from a DataFrame object to a relational database like _SQLite3_.
+The DataFrame class provides the method `to_sql()` to write data to a table in a relational database. There is quite 
+some overhead when using relational databases:
+```python
+import sqlite3 as sq3
+
+con = sq3.connect('data/data.sql')  # A connection is opened to a new database file
+
+dataframe.to_sql('financial_data', con)  # financial_data is the name of the table to write to
+
+# checking the results and operate on them, this returns an array with the values (tuples)
+rows = con.execute('SELECT * FROM data WHERE No1 > 105 and No2 < 108').fetchall()  
+con.close() # Always close the connection
+```
+
+## Chapter 4: Mastering Vectorized Backtesting<a name="Chapter4"></a>
